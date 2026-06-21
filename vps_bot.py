@@ -571,17 +571,27 @@ def format_online_page(data: dict, page: int) -> str:
     start = page * ONLINE_PAGE_SIZE
     end = min(start + ONLINE_PAGE_SIZE, total)
     page_users = combined[start:end]
+    max_page = max(0, (total - 1) // ONLINE_PAGE_SIZE) if total else 0
 
-    lines = [f"Online Users ({total} total)"]
+    sep = "▬" * 35
+    lines = [
+        sep,
+        "       🌐 Online Users",
+        f"       Total: {total} connected",
+        sep,
+    ]
     if total == 0:
-        lines.append("None connected right now.")
+        lines.append("  No users connected right now.")
+        lines.append(sep)
     else:
         for idx, (user, kind) in enumerate(page_users, start + 1):
             icon = "📡" if kind == "VLESS" else "🔑"
-            lines.append(f"{idx}. {icon} {user['name']}")
-            lines.append(f"   IP: {user['ip']}")
-            lines.append(f"   {kind} | {user['last_seen']}")
-    lines.append(f"\nPage {page + 1}/{(total - 1) // ONLINE_PAGE_SIZE + 1 if total else 1}")
+            lines.append(f" {idx}.) {icon} {user['name']}")
+            lines.append(f"     IP  : {user['ip']}")
+            lines.append(f"     Type: {kind}")
+            lines.append(f"     Last: {user['last_seen']}")
+            lines.append(sep)
+    lines.append(f"  Page {page + 1}/{max_page + 1}")
 
     return "\n".join(lines)
 
@@ -589,13 +599,13 @@ def format_online_page(data: dict, page: int) -> str:
 def main_menu() -> list[list[InlineKeyboardButton]]:
     return [
         [
-            InlineKeyboardButton("VLESS", callback_data="menu_vless"),
-            InlineKeyboardButton("SSH", callback_data="menu_ssh"),
+            InlineKeyboardButton("📡 VLESS", callback_data="menu_vless"),
+            InlineKeyboardButton("🔑 SSH", callback_data="menu_ssh"),
         ],
         [
-            InlineKeyboardButton("Online", callback_data="online_page_0"),
-            InlineKeyboardButton("Status", callback_data="status"),
-            InlineKeyboardButton("Help", callback_data="help"),
+            InlineKeyboardButton("🌐 Online", callback_data="online_page_0"),
+            InlineKeyboardButton("📊 Status", callback_data="status"),
+            InlineKeyboardButton("❓ Help", callback_data="help"),
         ],
     ]
 
@@ -603,33 +613,42 @@ def main_menu() -> list[list[InlineKeyboardButton]]:
 def vless_menu() -> list[list[InlineKeyboardButton]]:
     return [
         [
-            InlineKeyboardButton("List", callback_data="vless_list"),
-            InlineKeyboardButton("Create", callback_data="vless_create"),
+            InlineKeyboardButton("📋 List", callback_data="vless_list"),
+            InlineKeyboardButton("➕ Create", callback_data="vless_create"),
         ],
         [
-            InlineKeyboardButton("Delete", callback_data="vless_delete"),
-            InlineKeyboardButton("Extend", callback_data="vless_extend"),
+            InlineKeyboardButton("🗑 Delete", callback_data="vless_delete"),
+            InlineKeyboardButton("⏳ Extend", callback_data="vless_extend"),
         ],
-        [InlineKeyboardButton("Back", callback_data="menu")],
+        [InlineKeyboardButton("🔙 Back", callback_data="menu")],
     ]
 
 
 def ssh_menu() -> list[list[InlineKeyboardButton]]:
     return [
         [
-            InlineKeyboardButton("List", callback_data="ssh_list"),
-            InlineKeyboardButton("Create", callback_data="ssh_create"),
+            InlineKeyboardButton("📋 List", callback_data="ssh_list"),
+            InlineKeyboardButton("➕ Create", callback_data="ssh_create"),
         ],
         [
-            InlineKeyboardButton("Delete", callback_data="ssh_delete"),
-            InlineKeyboardButton("Extend", callback_data="ssh_extend"),
+            InlineKeyboardButton("🗑 Delete", callback_data="ssh_delete"),
+            InlineKeyboardButton("⏳ Extend", callback_data="ssh_extend"),
         ],
-        [InlineKeyboardButton("Back", callback_data="menu")],
+        [InlineKeyboardButton("🔙 Back", callback_data="menu")],
     ]
 
 
 def dashboard_text() -> str:
-    return f"VPN Manager\nIP: {IP}\nDomain: {DOMAIN}"
+    sep = "▬" * 36
+    return (
+        f"{sep}\n"
+        f"      🚀 Premium VPN Manager\n"
+        f"{sep}\n"
+        f"  🌐 Domain : {DOMAIN}\n"
+        f"  📡 IP     : {IP}\n"
+        f"  🟢 XRAY   : {xray_status()}\n"
+        f"{sep}"
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -653,26 +672,31 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     elif data == "menu_vless":
         await query.edit_message_text(
-            "VLESS Menu", reply_markup=InlineKeyboardMarkup(vless_menu())
+            "📡  VLESS Configuration", reply_markup=InlineKeyboardMarkup(vless_menu())
         )
     elif data == "menu_ssh":
         await query.edit_message_text(
-            "SSH Menu", reply_markup=InlineKeyboardMarkup(ssh_menu())
+            "🔑  SSH Configuration", reply_markup=InlineKeyboardMarkup(ssh_menu())
         )
 
     elif data == "vless_list":
         users = get_users()
         if not users:
             await query.edit_message_text(
-                "No VLESS users.", reply_markup=InlineKeyboardMarkup(vless_menu())
+                "📡 No VLESS users found.",
+                reply_markup=InlineKeyboardMarkup(vless_menu()),
             )
             return
-        lines = ["VLESS Users:"]
+        sep = "─" * 30
+        lines = [sep, "     📡  VLESS Users", sep]
         for index, user in enumerate(users, 1):
-            lines.append(
-                f"{index}. {user['name']} - {status_label(user['expiry'])} ({user['expiry']})"
-            )
-        lines.append("\n/info username for details")
+            remaining = status_label(user["expiry"])
+            expiry = user["expiry"]
+            icon = "✅" if remaining != "EXPIRED" else "❌"
+            lines.append(f"  {index}. {icon} {user['name']}")
+            lines.append(f"      Exp: {expiry} ({remaining})")
+        lines.append(sep)
+        lines.append("  💡 /info username for details")
         await query.edit_message_text(
             "\n".join(lines), reply_markup=InlineKeyboardMarkup(vless_menu())
         )
@@ -680,53 +704,59 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data == "vless_create":
         context.user_data["create_type"] = "vless"
         context.user_data["state"] = "create_username"
-        await query.edit_message_text("Enter username:")
+        await query.edit_message_text(
+            "➕ Enter VLESS username:"
+        )
 
     elif data == "vless_delete":
         users = get_users()
         if not users:
             await query.edit_message_text(
-                "No VLESS users.", reply_markup=InlineKeyboardMarkup(vless_menu())
+                "📡 No VLESS users to delete.",
+                reply_markup=InlineKeyboardMarkup(vless_menu()),
             )
             return
         keyboard = [
-            [InlineKeyboardButton(user["name"], callback_data=f"delv_{user['name']}")]
+            [InlineKeyboardButton(f"🗑 {user['name']}", callback_data=f"delv_{user['name']}")]
             for user in users
         ]
-        keyboard.append([InlineKeyboardButton("Back", callback_data="menu_vless")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_vless")])
         await query.edit_message_text(
-            "Select VLESS user to delete:", reply_markup=InlineKeyboardMarkup(keyboard)
+            "🗑  Select user to delete:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
     elif data == "vless_extend":
         users = get_users()
         if not users:
             await query.edit_message_text(
-                "No VLESS users.", reply_markup=InlineKeyboardMarkup(vless_menu())
+                "📡 No VLESS users to extend.",
+                reply_markup=InlineKeyboardMarkup(vless_menu()),
             )
             return
         keyboard = [
             [
                 InlineKeyboardButton(
-                    f"{user['name']} ({days_left(user['expiry'])}d)",
+                    f"⏳ {user['name']} ({days_left(user['expiry'])}d)",
                     callback_data=f"extv_{user['name']}",
                 )
             ]
             for user in users
         ]
-        keyboard.append([InlineKeyboardButton("Back", callback_data="menu_vless")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_vless")])
         await query.edit_message_text(
-            "Select VLESS user:", reply_markup=InlineKeyboardMarkup(keyboard)
+            "⏳  Select user to extend:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
     elif data.startswith("delv_"):
         name = data[5:]
         await query.edit_message_text(
-            f"Delete VLESS user {name}?",
+            f"🗑  Delete VLESS user {name}?",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("Yes", callback_data=f"dodelv_{name}")],
-                    [InlineKeyboardButton("No", callback_data="menu_vless")],
+                    [InlineKeyboardButton("✅ Yes", callback_data=f"dodelv_{name}")],
+                    [InlineKeyboardButton("❌ No", callback_data="menu_vless")],
                 ]
             ),
         )
@@ -734,18 +764,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         name = data[7:]
         _, message = delete_vless_user(name)
         await query.edit_message_text(
-            message, reply_markup=InlineKeyboardMarkup(vless_menu())
+            f"🗑 {message}", reply_markup=InlineKeyboardMarkup(vless_menu())
         )
     elif data.startswith("extv_"):
         name = data[5:]
         await query.edit_message_text(
-            f"Extend {name} by:",
+            f"⏳  Extend {name} by:",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("+7", callback_data=f"extdov_{name}_7")],
-                    [InlineKeyboardButton("+14", callback_data=f"extdov_{name}_14")],
-                    [InlineKeyboardButton("+30", callback_data=f"extdov_{name}_30")],
-                    [InlineKeyboardButton("Back", callback_data="menu_vless")],
+                    [InlineKeyboardButton("➕ 7 days", callback_data=f"extdov_{name}_7")],
+                    [InlineKeyboardButton("➕ 14 days", callback_data=f"extdov_{name}_14")],
+                    [InlineKeyboardButton("➕ 30 days", callback_data=f"extdov_{name}_30")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu_vless")],
                 ]
             ),
         )
@@ -755,21 +785,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             name, days = parts[1], int(parts[2])
             _, message = extend_vless_user(name, days)
             await query.edit_message_text(
-                message, reply_markup=InlineKeyboardMarkup(vless_menu())
+                f"⏳ {message}", reply_markup=InlineKeyboardMarkup(vless_menu())
             )
 
     elif data == "ssh_list":
         users = get_ssh_users()
         if not users:
             await query.edit_message_text(
-                "No SSH users.", reply_markup=InlineKeyboardMarkup(ssh_menu())
+                "🔑 No SSH users found.",
+                reply_markup=InlineKeyboardMarkup(ssh_menu()),
             )
             return
-        lines = ["SSH Users:"]
+        sep = "─" * 30
+        lines = [sep, "     🔑  SSH Users", sep]
         for index, user in enumerate(users, 1):
-            lines.append(
-                f"{index}. {user['name']} - {status_label(user['expiry'])} ({user['expiry']})"
-            )
+            remaining = status_label(user["expiry"])
+            expiry = user["expiry"]
+            icon = "✅" if remaining != "EXPIRED" else "❌"
+            lines.append(f"  {index}. {icon} {user['name']}")
+            lines.append(f"      Exp: {expiry} ({remaining})")
+        lines.append(sep)
         await query.edit_message_text(
             "\n".join(lines), reply_markup=InlineKeyboardMarkup(ssh_menu())
         )
@@ -777,53 +812,59 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data == "ssh_create":
         context.user_data["create_type"] = "ssh"
         context.user_data["state"] = "create_username"
-        await query.edit_message_text("Enter SSH username:")
+        await query.edit_message_text(
+            "➕ Enter SSH username:"
+        )
 
     elif data == "ssh_delete":
         users = get_ssh_users()
         if not users:
             await query.edit_message_text(
-                "No SSH users.", reply_markup=InlineKeyboardMarkup(ssh_menu())
+                "🔑 No SSH users to delete.",
+                reply_markup=InlineKeyboardMarkup(ssh_menu()),
             )
             return
         keyboard = [
-            [InlineKeyboardButton(user["name"], callback_data=f"dels_{user['name']}")]
+            [InlineKeyboardButton(f"🗑 {user['name']}", callback_data=f"dels_{user['name']}")]
             for user in users
         ]
-        keyboard.append([InlineKeyboardButton("Back", callback_data="menu_ssh")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_ssh")])
         await query.edit_message_text(
-            "Select SSH user to delete:", reply_markup=InlineKeyboardMarkup(keyboard)
+            "🗑  Select SSH user to delete:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
     elif data == "ssh_extend":
         users = get_ssh_users()
         if not users:
             await query.edit_message_text(
-                "No SSH users.", reply_markup=InlineKeyboardMarkup(ssh_menu())
+                "🔑 No SSH users to extend.",
+                reply_markup=InlineKeyboardMarkup(ssh_menu()),
             )
             return
         keyboard = [
             [
                 InlineKeyboardButton(
-                    f"{user['name']} ({days_left(user['expiry'])}d)",
+                    f"⏳ {user['name']} ({days_left(user['expiry'])}d)",
                     callback_data=f"exts_{user['name']}",
                 )
             ]
             for user in users
         ]
-        keyboard.append([InlineKeyboardButton("Back", callback_data="menu_ssh")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu_ssh")])
         await query.edit_message_text(
-            "Select SSH user:", reply_markup=InlineKeyboardMarkup(keyboard)
+            "⏳  Select SSH user to extend:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
     elif data.startswith("dels_"):
         name = data[5:]
         await query.edit_message_text(
-            f"Delete SSH user {name}?",
+            f"🗑  Delete SSH user {name}?",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("Yes", callback_data=f"dodels_{name}")],
-                    [InlineKeyboardButton("No", callback_data="menu_ssh")],
+                    [InlineKeyboardButton("✅ Yes", callback_data=f"dodels_{name}")],
+                    [InlineKeyboardButton("❌ No", callback_data="menu_ssh")],
                 ]
             ),
         )
@@ -831,18 +872,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         name = data[7:]
         _, message = delete_ssh_user(name)
         await query.edit_message_text(
-            message, reply_markup=InlineKeyboardMarkup(ssh_menu())
+            f"🗑 {message}", reply_markup=InlineKeyboardMarkup(ssh_menu())
         )
     elif data.startswith("exts_"):
         name = data[5:]
         await query.edit_message_text(
-            f"Extend {name} by:",
+            f"⏳  Extend {name} by:",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("+7", callback_data=f"extdos_{name}_7")],
-                    [InlineKeyboardButton("+14", callback_data=f"extdos_{name}_14")],
-                    [InlineKeyboardButton("+30", callback_data=f"extdos_{name}_30")],
-                    [InlineKeyboardButton("Back", callback_data="menu_ssh")],
+                    [InlineKeyboardButton("➕ 7 days", callback_data=f"extdos_{name}_7")],
+                    [InlineKeyboardButton("➕ 14 days", callback_data=f"extdos_{name}_14")],
+                    [InlineKeyboardButton("➕ 30 days", callback_data=f"extdos_{name}_30")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu_ssh")],
                 ]
             ),
         )
@@ -852,7 +893,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             name, days = parts[1], int(parts[2])
             _, message = extend_ssh_user(name, days)
             await query.edit_message_text(
-                message, reply_markup=InlineKeyboardMarkup(ssh_menu())
+                f"⏳ {message}", reply_markup=InlineKeyboardMarkup(ssh_menu())
             )
 
     elif data == "status":
@@ -860,24 +901,50 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ssh_users = get_ssh_users()
         vless_active = sum(1 for user in vless_users if days_left(user["expiry"]) > 0)
         ssh_active = sum(1 for user in ssh_users if days_left(user["expiry"]) > 0)
+        xr = xray_status()
+        xr_icon = "✅" if xr == "active" else "❌"
+        sep = "▬" * 36
         message = (
-            f"Status:\nIP: {IP}\nDomain: {DOMAIN}\n"
-            f"XRAY: {xray_status()}\n\n"
-            f"VLESS: {len(vless_users)} ({vless_active} active)\n"
-            f"SSH: {len(ssh_users)} ({ssh_active} active)"
+            f"{sep}\n"
+            f"        📊  System Status\n"
+            f"{sep}\n"
+            f"  🌐 Domain : {DOMAIN}\n"
+            f"  📡 IP     : {IP}\n"
+            f"  {xr_icon}  XRAY   : {xr}\n"
+            f"{sep}\n"
+            f"  📡 VLESS : {len(vless_users)} ({vless_active} active)\n"
+            f"  🔑 SSH   : {len(ssh_users)} ({ssh_active} active)\n"
+            f"{sep}"
         )
         await query.edit_message_text(
             message, reply_markup=InlineKeyboardMarkup(main_menu())
         )
 
     elif data == "help":
+        sep = "─" * 30
+        message = (
+            f"{sep}\n"
+            f"      ❓  Help & Commands\n"
+            f"{sep}\n"
+            f"  📡  VLESS\n"
+            f"  Create & manage VLESS VPN\n"
+            f"  accounts with TLS/nonTLS\n"
+            f"\n"
+            f"  🔑  SSH\n"
+            f"  Create & manage SSH VPN\n"
+            f"  accounts with port info\n"
+            f"\n"
+            f"  🌐  Online\n"
+            f"  View currently connected users\n"
+            f"\n"
+            f"{sep}\n"
+            f"  Commands:\n"
+            f"  /start - Main menu\n"
+            f"  /info username - User details\n"
+            f"{sep}"
+        )
         await query.edit_message_text(
-            "VLESS - Create/Manage VLESS VPN users\n"
-            "SSH - Create/Manage SSH VPN users\n\n"
-            "Commands:\n"
-            "/start - Main menu\n"
-            "/info username - User details",
-            reply_markup=InlineKeyboardMarkup(main_menu()),
+            message, reply_markup=InlineKeyboardMarkup(main_menu())
         )
 
     elif data.startswith("online_page_"):
@@ -910,7 +977,7 @@ async def finalize_create(query, context: ContextTypes.DEFAULT_TYPE, custom_uuid
         name = context.user_data.get("create_name")
         days = context.user_data.get("create_days")
         if not name or not days:
-            await query.edit_message_text("Session expired.")
+            await query.edit_message_text("❌ Session expired.")
             context.user_data.clear()
             return
 
@@ -935,7 +1002,7 @@ async def finalize_create_msg(message_obj, context: ContextTypes.DEFAULT_TYPE, c
         name = context.user_data.get("create_name")
         days = context.user_data.get("create_days")
         if not name or not days:
-            await message_obj.reply_text("Session expired.")
+            await message_obj.reply_text("❌ Session expired.")
             context.user_data.clear()
             return
 
@@ -964,38 +1031,45 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if state == "create_username":
             create_type = context.user_data.get("create_type", "vless")
             if create_type == "vless" and any(user["name"] == text for user in get_users()):
-                await update.message.reply_text(f'User "{text}" already exists!')
+                await update.message.reply_text(f'❌ User "{text}" already exists!')
                 return
             if create_type == "ssh" and get_ssh_user(text):
-                await update.message.reply_text(f'SSH user "{text}" already exists!')
+                await update.message.reply_text(f'❌ SSH user "{text}" already exists!')
                 return
             context.user_data["create_name"] = text
             context.user_data["state"] = "create_days"
-            await update.message.reply_text("Enter days (1-365):")
+            await update.message.reply_text("📅  Enter days (1-365):")
 
         elif state == "create_days":
             try:
                 days = int(text)
             except Exception:
-                await update.message.reply_text("Must be a number. Try again:")
+                await update.message.reply_text("❌ Must be a number. Try again:")
                 return
             if days < 1 or days > 365:
-                await update.message.reply_text("Days must be 1-365. Try again:")
+                await update.message.reply_text("❌ Days must be 1-365. Try again:")
                 return
 
             context.user_data["create_days"] = days
             create_type = context.user_data.get("create_type", "vless")
             if create_type == "ssh":
                 context.user_data["state"] = "create_ssh_pass"
-                await update.message.reply_text("Enter SSH password:")
+                await update.message.reply_text("🔑  Enter SSH password:")
             else:
                 context.user_data["state"] = "create_uuid_choice"
                 keyboard = [
-                    [InlineKeyboardButton("Auto Generate", callback_data="create_auto_uuid")],
-                    [InlineKeyboardButton("Custom UUID", callback_data="create_custom_uuid")],
+                    [InlineKeyboardButton("🎲 Auto Generate", callback_data="create_auto_uuid")],
+                    [InlineKeyboardButton("✏️ Custom UUID", callback_data="create_custom_uuid")],
                 ]
+                sep = "─" * 25
                 await update.message.reply_text(
-                    f"Username: {context.user_data['create_name']}\nDays: {days}\n\nSelect UUID:",
+                    f"{sep}\n"
+                    f"  ➕ Create VLESS User\n"
+                    f"{sep}\n"
+                    f"  👤 Username: {context.user_data['create_name']}\n"
+                    f"  📅 Days: {days}\n"
+                    f"{sep}\n"
+                    f"  Select UUID option:",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                 )
 
@@ -1003,7 +1077,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             name = context.user_data.get("create_name")
             days = context.user_data.get("create_days")
             if not name or not days:
-                await update.message.reply_text("Session expired.")
+                await update.message.reply_text("❌ Session expired.")
                 context.user_data.clear()
                 return
             ok, message = add_ssh_user(name, text, days)
@@ -1018,7 +1092,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         elif state == "create_custom_uuid":
             if not UUID_PATTERN.match(text.lower()):
-                await update.message.reply_text("Invalid UUID format!")
+                await update.message.reply_text("❌ Invalid UUID format!")
                 return
             await finalize_create_msg(update.message, context, text)
 
@@ -1045,7 +1119,7 @@ async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(format_ssh_info(ssh_user), parse_mode="Markdown")
         return
 
-    await update.message.reply_text(f"User {name} not found")
+    await update.message.reply_text(f"❌ User {name} not found")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
