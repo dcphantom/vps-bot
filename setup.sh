@@ -55,6 +55,38 @@ echo -e "${YELLOW}[4/4] Starting bot...${NC}"
 systemctl start vps-bot
 sleep 2
 
+# ── Optional: build binary (encrypt code) ──
+if command -v pyinstaller &>/dev/null; then
+    echo -e "${YELLOW}[Optional] Building encrypted binary with PyInstaller...${NC}"
+    pyinstaller --onefile --name vps_bot_bin --hidden-import telegram --hidden-import telegram.ext --distpath /root /root/vps_bot.py &>/dev/null
+    cp /root/vps_bot_bin/vps_bot_bin /root/
+    chmod +x /root/vps_bot_bin
+    rm -rf /root/build /root/vps_bot_bin /root/*.spec /root/__pycache__ 2>/dev/null
+    # Update service to use binary
+    cat > /etc/systemd/system/vps-bot.service << 'EOF2'
+[Unit]
+Description=Telegram VPN Bot (Binary)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=/root/vps_bot_bin
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF2
+    systemctl daemon-reload
+    systemctl restart vps-bot
+    sleep 2
+    echo -e "${GREEN}Bot encrypted as binary!${NC}"
+else
+    echo -e "${YELLOW}PyInstaller not found. Bot runs as .py (install pyinstaller for encryption).${NC}"
+fi
+
 # ── Check ──
 STATUS=$(systemctl is-active vps-bot)
 if [[ "$STATUS" == "active" ]]; then
