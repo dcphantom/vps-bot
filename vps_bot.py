@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -30,8 +31,123 @@ PORT_PATTERN = re.compile(r'"port":\s*"?(\d+)"?')
 ARRAY_CLOSE_PATTERN = re.compile(r"^\s{8}\]")
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-NONE_SECTIONS = {"1301": "#vls", "1302": "#vls-http", "8080": "#vls-xhttp"}
-TLS_SECTIONS = {"1212": "#vls", "1213": "#vls-http", "8443": "#vls-xhttp"}
+# ── Universal auto-detection helpers ──
+
+def detect_vless_inbounds():
+    """Parse all xray configs and auto-detect VLESS inbounds with their types."""
+    def strip_comments(text):
+        res, i, in_str = [], 0, False
+        while i < len(text):
+            c = text[i]
+            if c == '"' and (i == 0 or text[i-1] != '\\'):
+                in_str = not in_str
+            if not in_str:
+                if c == '#':
+                    while i < len(text) and text[i] != '\n':
+                        i += 1
+                    continue
+                if c == '/' and i+1 < len(text) and text[i+1] == '*':
+                    i += 2
+                    while i < len(text):
+                        if text[i] == '*' and i+1 < len(text) and text[i+1] == '/':
+                            i += 2
+                            break
+                        i += 1
+                    continue
+            res.append(c)
+            i += 1
+        return ''.join(res)
+    
+    inbounds = []
+    for cfg_path in (XRAY_CFG, XRAY_NONE):
+        try:
+            raw = read_cfg(cfg_path)
+            data = json.loads(strip_comments(raw))
+        except:
+            continue
+        file_tag = "none" if "none.json" in cfg_path else "config"
+        for ib in data.get("inbounds", []):
+            if ib.get("protocol") != "vless":
+                continue
+            port = str(ib.get("port", ""))
+            ss = ib.get("streamSettings", {})
+            net = ss.get("network", "tcp")
+            sec = ss.get("security", "none")
+            path = ""
+            if net == "ws":
+                path = ss.get("wsSettings", {}).get("path", "/")
+            elif net == "xhttp":
+                path = ss.get("xhttpSettings", {}).get("path", "/")
+            elif net == "httpupgrade":
+                path = ss.get("httpupgradeSettings", {}).get("path", "/")
+            is_internal = ib.get("listen") == "127.0.0.1" or int(port) >= 1200
+            inbounds.append({
+                "port": port, "network": net, "security": sec,
+                "path": path, "file_tag": file_tag, "is_internal": is_internal
+            })
+    
+    # Determine external ports from non-internal inbounds
+    ext = {"tls": "443", "non_tls": "80", "xhttp_tls": "8443", "xhttp_ntls": "8080"}
+    for ib in inbounds:
+        if not ib["is_internal"]:
+            if ib["security"] == "tls":
+                ext["tls"] = ib["port"]
+            else:
+                ext["non_tls"] = ib["port"]
+        if ib["network"] == "xhttp":
+            if ib["security"] == "tls":
+                ext["xhttp_tls"] = ib["port"]
+            else:
+                ext["xhttp_ntls"] = ib["port"]
+    
+    # Build INBOUND_SECTIONS for add_user_to_cfg
+    sections = {}
+    for ib in inbounds:
+        if ib["is_internal"]:
+            prefix = "#vls"
+            if ib["network"] == "httpupgrade":
+                prefix = "#vls-http"
+            elif ib["network"] == "xhttp":
+                prefix = "#vls-xhttp"
+            sections[ib["port"]] = {"tag": prefix, "file_tag": ib["file_tag"]}
+    
+    return inbounds, sections, ext
+
+def detect_ssh_info():
+    """Auto-detect SSH ports and services from system config."""
+    info = {"openssh": [22], "dropbear": [], "stunnel": [],
+            "squid": [], "ws_http": "8880", "ws_https": "2096", "ws_ovpn": "2097"}
+    try:
+        r = run_command(["grep", "-i", "^Port", "/etc/ssh/sshd_config"])
+        ports = [int(m.group(1)) for line in r.stdout.split("\n") if (m := re.search(r"Port\s+(\d+)", line, re.IGNORECASE))]
+        if ports: info["openssh"] = ports
+    except: pass
+    try:
+        for p in ["/etc/default/dropbear", "/etc/dropbear/dropbear.conf"]:
+            if os.path.exists(p):
+                with open(p) as f: c = f.read()
+                for m in re.finditer(r"(?:DROPBEAR_PORT|PORT)\s*[=:]\s*(\d+)", c, re.IGNORECASE):
+                    info["dropbear"].append(int(m.group(1)))
+                for m in re.finditer(r"-p\s+(\d+)", c):
+                    info["dropbear"].append(int(m.group(1)))
+    except: pass
+    try:
+        p = "/etc/stunnel/stunnel.conf"
+        if os.path.exists(p):
+            with open(p) as f: c = f.read()
+            info["stunnel"] = [int(m.group(1)) for m in re.finditer(r"accept\s*=\s*(\d+)", c, re.IGNORECASE)]
+    except: pass
+    try:
+        for p in ["/etc/squid/squid.conf", "/etc/squid3/squid.conf"]:
+            if os.path.exists(p):
+                with open(p) as f: c = f.read()
+                info["squid"] = [int(m.group(1)) for m in re.finditer(r"http_port\s+(\d+)", c, re.IGNORECASE)]
+    except: pass
+    return info
+
+# Run detection once at module load
+_, INBOUND_SECTIONS, EXT = detect_vless_inbounds()
+SSH_DATA = detect_ssh_info()
 XRAY_ACCESS_LOG = "/var/log/xray/access.log"
 ONLINE_PAGE_SIZE = 10
 
@@ -149,24 +265,32 @@ def xray_status() -> str:
 
 
 def build_links(name: str, uid: str, expiry: str) -> list[str]:
+    tls = EXT["tls"]
+    ntls = EXT["non_tls"]
+    xtls = EXT["xhttp_tls"]
+    xntls = EXT["xhttp_ntls"]
     return [
-        f"vless://{uid}@{DOMAIN}:443?path=/vless&security=tls&encryption=none&type=ws&sni={DOMAIN}#{name}_{expiry}",
-        f"vless://{uid}@{DOMAIN}:80?path=/&encryption=none&type=ws&host={DOMAIN}#{name}_{expiry}",
-        f"vless://{uid}@{DOMAIN}:443?path=/httpupgrade&security=tls&encryption=none&type=httpupgrade&sni={DOMAIN}#httpupgrade-{name}_{expiry}",
-        f"vless://{uid}@{DOMAIN}:8443?path=/xhttp&security=tls&encryption=none&type=xhttp&sni={DOMAIN}#xhttp-{name}_{expiry}",
-        f"vless://{uid}@{DOMAIN}:8080?path=/xhttp&encryption=none&type=xhttp&host={DOMAIN}#xhttpntls-{name}_{expiry}",
+        f"vless://{uid}@{DOMAIN}:{tls}?path=/vless&security=tls&encryption=none&type=ws&sni={DOMAIN}#{name}_{expiry}",
+        f"vless://{uid}@{DOMAIN}:{ntls}?path=/&encryption=none&type=ws&host={DOMAIN}#{name}_{expiry}",
+        f"vless://{uid}@{DOMAIN}:{tls}?path=/httpupgrade&security=tls&encryption=none&type=httpupgrade&sni={DOMAIN}#httpupgrade-{name}_{expiry}",
+        f"vless://{uid}@{DOMAIN}:{xtls}?path=/xhttp&security=tls&encryption=none&type=xhttp&sni={DOMAIN}#xhttp-{name}_{expiry}",
+        f"vless://{uid}@{DOMAIN}:{xntls}?path=/xhttp&encryption=none&type=xhttp&host={DOMAIN}#xhttpntls-{name}_{expiry}",
     ]
 
 
 def format_vless_info(user: dict) -> str:
     links = build_links(user["name"], user["uuid"], user["expiry"])
     separator = "=" * 40
+    tls_port = EXT["tls"]
+    ntls_port = EXT["non_tls"]
+    xtls_port = EXT["xhttp_tls"]
+    xntls_port = EXT["xhttp_ntls"]
     blocks = [
-        ("VLESS TLS (443)", links[0]),
-        ("VLESS Non-TLS (80)", links[1]),
-        ("HTTPUpgrade (443)", links[2]),
-        ("XHTTP TLS (8443)", links[3]),
-        ("XHTTP Non-TLS (8080)", links[4]),
+        (f"VLESS TLS ({tls_port})", links[0]),
+        (f"VLESS Non-TLS ({ntls_port})", links[1]),
+        (f"HTTPUpgrade ({tls_port})", links[2]),
+        (f"XHTTP TLS ({xtls_port})", links[3]),
+        (f"XHTTP Non-TLS ({xntls_port})", links[4]),
     ]
     header = (
         f"{user['name']} | Exp: {user['expiry']} ({status_label(user['expiry'])}) "
@@ -179,6 +303,9 @@ def format_vless_info(user: dict) -> str:
 
 def make_sub_file(name: str, uid: str, expiry: str) -> None:
     links = build_links(name, uid, expiry)
+    tls_port = EXT["tls"]
+    ntls_port = EXT["non_tls"]
+    xntls_port = EXT["xhttp_ntls"]
     separator = "=" * 68
     content = f"""{separator}
              P R O J E C T  O F  N I L P H R E A K Z V P N
@@ -194,8 +321,8 @@ def make_sub_file(name: str, uid: str, expiry: str) -> None:
 Remarks               : {name}
 Domain                : {DOMAIN}
 IP/Host               : {IP}
-Port TLS              : 443
-Port None TLS         : 80, 8080
+Port TLS              : {tls_port}
+Port None TLS         : {ntls_port}, {xntls_port}
 User ID               : {uid}
 Encryption            : None
 Network               : WebSocket
@@ -240,9 +367,11 @@ def remove_sub_file(name: str) -> None:
 
 
 def add_user_to_cfg(cfg_path: str, name: str, uid: str, exp_date: str, today: str) -> bool:
-    tags = NONE_SECTIONS if "none.json" in cfg_path else TLS_SECTIONS
-    sections = {port: f"{tag} {name} {exp_date} {today} {uid}" for port, tag in tags.items()}
-    entry = f',{{"id": "{uid}","email": "{name}"}}'
+    file_tag = "none" if "none.json" in cfg_path else "config"
+    sections = {}
+    for port, sec in INBOUND_SECTIONS.items():
+        if sec["file_tag"] == file_tag:
+            sections[port] = sec["tag"]
 
     out: list[str] = []
     done: set[str] = set()
@@ -259,7 +388,10 @@ def add_user_to_cfg(cfg_path: str, name: str, uid: str, exp_date: str, today: st
             and current_port not in done
             and ARRAY_CLOSE_PATTERN.search(line)
         ):
-            out.append(sections[current_port])
+            tag = sections[current_port]
+            comm = f"{tag} {name} {exp_date} {today} {uid}"
+            entry = f',{{"id": "{uid}","email": "{name}"}}'
+            out.append(comm)
             out.append(entry)
             out.append(line)
             added += 1
@@ -432,6 +564,15 @@ def format_ssh_info(user: dict, password: str = "") -> str:
     separator = "=" * 68
     secret = password or "(your password)"
     auth_pass = password or "pass"
+
+    openssh_ports = ", ".join(str(p) for p in SSH_DATA["openssh"])
+    dropbear_ports = ", ".join(str(p) for p in SSH_DATA["dropbear"]) if SSH_DATA["dropbear"] else "143, 109"
+    stunnel_ports = ", ".join(str(p) for p in SSH_DATA["stunnel"]) if SSH_DATA["stunnel"] else "222, 777"
+    squid_ports = ", ".join(str(p) for p in SSH_DATA["squid"]) if SSH_DATA["squid"] else "3128, 8000"
+    ws_http = SSH_DATA.get("ws_http", "8880")
+    ws_https = SSH_DATA.get("ws_https", "2096")
+    ws_ovpn = SSH_DATA.get("ws_ovpn", "2097")
+
     body = f"""{separator}
          [ Premium Account SSH & OpenVPN ]
 {separator}
@@ -442,23 +583,23 @@ Expired          : {expiry}
 {separator}
 Domain           : {DOMAIN}
 IP/Host          : {IP}
-OpenSSH          : 22
-Dropbear         : 143, 109
-SSL/TLS          : 222, 777
+OpenSSH          : {openssh_ports}
+Dropbear         : {dropbear_ports}
+SSL/TLS          : {stunnel_ports}
 SSH-UDP          : 1-65535
-WS SSH(HTTP)     : 8880
-WS SSL(HTTPS)    : 443, 2096
-WS OpenVPN(HTTP) : 2097
+WS SSH(HTTP)     : {ws_http}
+WS SSL(HTTPS)    : 443, {ws_https}
+WS OpenVPN(HTTP) : {ws_ovpn}
 OHP Dropbear     : 8585
 OHP OpenSSH      : 8686
 OHP OpenVPN      : 8787
-Port Squid       : 3128, 8000 (limit to IP Server)
+Port Squid       : {squid_ports} (limit to IP Server)
 Badvpn(UDPGW)    : 7100-7300
 {separator}
 CONFIG SSH WS
 SSH Config  : {{http://{IP}}}:81/ssh-u.txt
 SSH 22      : {DOMAIN}:22@{user['name']}:{auth_pass}
-SSH 8880    : {DOMAIN}:8880@{user['name']}:{auth_pass}
+SSH {ws_http}    : {DOMAIN}:{ws_http}@{user['name']}:{auth_pass}
 SSH 443     : {DOMAIN}:443@{user['name']}:{auth_pass}
 SSH 1-65535 : {DOMAIN}:1-65535@{user['name']}:{auth_pass}
 {separator}
