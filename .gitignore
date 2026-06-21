@@ -1,0 +1,7 @@
+vps_bot.py
+build/
+dist/
+*.spec
+__pycache__/
+pyarmor_dist/
+*.pyc
