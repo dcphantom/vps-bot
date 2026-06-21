@@ -1,8 +1,7 @@
 # Telegram VPN Bot
 
-**Encrypted Binary** — Telegram Bot for managing VLESS & SSH VPN users. Auto-detect IP, domain, ports, and web path.
+**Telegram Bot** — managing VLESS & SSH VPN users. Auto-detect IP, domain, ports, and web path.
 
-No source code exposed. Runs as a compiled PyInstaller binary.
 
 ## Features
 
@@ -10,7 +9,6 @@ No source code exposed. Runs as a compiled PyInstaller binary.
 - **SSH** — Create, List, Delete, Extend users
 - **Online Monitoring** — Who's connected (VLESS from access log + SSH from `who`/`ss`) with pagination
 - **Auto-detect** — IP, domain, Xray ports, SSH ports detected automatically
-- **Encrypted** — PyInstaller binary, source code not exposed
 - **Auto-restart** — systemd service, restart on crash, boot on start
 
 ## Quick Install
