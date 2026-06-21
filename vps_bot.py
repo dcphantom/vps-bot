@@ -144,10 +144,6 @@ def detect_ssh_info():
                 info["squid"] = [int(m.group(1)) for m in re.finditer(r"http_port\s+(\d+)", c, re.IGNORECASE)]
     except: pass
     return info
-
-# Run detection once at module load
-_, INBOUND_SECTIONS, EXT = detect_vless_inbounds()
-SSH_DATA = detect_ssh_info()
 XRAY_ACCESS_LOG = "/var/log/xray/access.log"
 ONLINE_PAGE_SIZE = 10
 
@@ -735,6 +731,11 @@ def format_online_page(data: dict, page: int) -> str:
     lines.append(f"  Page {page + 1}/{max_page + 1}")
 
     return "\n".join(lines)
+
+
+# Run detection once at module load (after all function defs)
+_, INBOUND_SECTIONS, EXT = detect_vless_inbounds()
+SSH_DATA = detect_ssh_info()
 
 
 def main_menu() -> list[list[InlineKeyboardButton]]:
