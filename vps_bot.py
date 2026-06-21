@@ -26,43 +26,51 @@ XRAY_CFG = "/usr/local/etc/xray/config.json"
 XRAY_NONE = "/usr/local/etc/xray/none.json"
 ALLOWED_USERS: list[int] = []
 
-USER_PATTERN = re.compile(r"#vls(?:-http|-xhttp)?\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
-PORT_PATTERN = re.compile(r'"port":\s*"?(\d+)"?')
-ARRAY_CLOSE_PATTERN = re.compile(r"^\s{8}\]")
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _strip_comments(text: str) -> str:
+    res, i, in_str = [], 0, False
+    while i < len(text):
+        c = text[i]
+        if c == '"' and (i == 0 or text[i - 1] != "\\"):
+            in_str = not in_str
+        if not in_str:
+            if c == "#":
+                while i < len(text) and text[i] != "\n":
+                    i += 1
+                continue
+            if c == "/" and i + 1 < len(text) and text[i + 1] == "*":
+                i += 2
+                while i < len(text):
+                    if text[i] == "*" and i + 1 < len(text) and text[i + 1] == "/":
+                        i += 2
+                        break
+                    i += 1
+                continue
+        res.append(c)
+        i += 1
+    return "".join(res)
+
+
+def _read_json(path: str) -> dict:
+    with open(path) as f:
+        return json.loads(_strip_comments(f.read()))
+
+
+def _write_json(path: str, data: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
 
 # ── Universal auto-detection helpers ──
 
 def detect_vless_inbounds():
     """Parse all xray configs and auto-detect VLESS inbounds with their types."""
-    def strip_comments(text):
-        res, i, in_str = [], 0, False
-        while i < len(text):
-            c = text[i]
-            if c == '"' and (i == 0 or text[i-1] != '\\'):
-                in_str = not in_str
-            if not in_str:
-                if c == '#':
-                    while i < len(text) and text[i] != '\n':
-                        i += 1
-                    continue
-                if c == '/' and i+1 < len(text) and text[i+1] == '*':
-                    i += 2
-                    while i < len(text):
-                        if text[i] == '*' and i+1 < len(text) and text[i+1] == '/':
-                            i += 2
-                            break
-                        i += 1
-                    continue
-            res.append(c)
-            i += 1
-        return ''.join(res)
-    
     inbounds = []
     for cfg_path in (XRAY_CFG, XRAY_NONE):
         try:
-            raw = read_cfg(cfg_path)
-            data = json.loads(strip_comments(raw))
+            data = _read_json(cfg_path)
         except:
             continue
         file_tag = "none" if "none.json" in cfg_path else "config"
@@ -222,20 +230,27 @@ def is_authorized(user_id: int) -> bool:
 
 
 def get_users() -> list[dict]:
+    seen: set[str] = set()
     users: list[dict] = []
     for cfg_path in (XRAY_CFG, XRAY_NONE):
-        for match in USER_PATTERN.finditer(read_cfg(cfg_path)):
-            name = match.group(1)
-            if any(user["name"] == name for user in users):
+        try:
+            data = _read_json(cfg_path)
+        except:
+            continue
+        for ib in data.get("inbounds", []):
+            if ib.get("protocol") != "vless":
                 continue
-            users.append(
-                {
-                    "name": name,
-                    "uuid": match.group(4),
-                    "expiry": match.group(2),
-                    "created": match.group(3),
-                }
-            )
+            for client in ib.get("settings", {}).get("clients", []):
+                email = client.get("email", "")
+                if email in seen or not email:
+                    continue
+                seen.add(email)
+                users.append({
+                    "name": email,
+                    "uuid": client.get("id", ""),
+                    "expiry": client.get("expiry", "unknown"),
+                    "created": client.get("created", "unknown"),
+                })
     return users
 
 
@@ -363,43 +378,22 @@ def remove_sub_file(name: str) -> None:
 
 
 def add_user_to_cfg(cfg_path: str, name: str, uid: str, exp_date: str, today: str) -> bool:
-    file_tag = "none" if "none.json" in cfg_path else "config"
-    sections = {}
-    for port, sec in INBOUND_SECTIONS.items():
-        if sec["file_tag"] == file_tag:
-            sections[port] = sec["tag"]
-
-    out: list[str] = []
-    done: set[str] = set()
-    current_port: str | None = None
-    added = 0
-
-    for line in read_cfg(cfg_path).split("\n"):
-        port_match = PORT_PATTERN.search(line)
-        if port_match:
-            current_port = port_match.group(1)
-
-        if (
-            current_port in sections
-            and current_port not in done
-            and ARRAY_CLOSE_PATTERN.search(line)
-        ):
-            tag = sections[current_port]
-            comm = f"{tag} {name} {exp_date} {today} {uid}"
-            entry = f',{{"id": "{uid}","email": "{name}"}}'
-            out.append(comm)
-            out.append(entry)
-            out.append(line)
-            added += 1
-            done.add(current_port)
-            current_port = None
-            continue
-
-        out.append(line)
-
-    if not added:
+    try:
+        data = _read_json(cfg_path)
+    except:
         return False
-    write_cfg(cfg_path, "\n".join(out))
+
+    modified = False
+    for ib in data.get("inbounds", []):
+        if ib.get("protocol") != "vless":
+            continue
+        clients = ib.setdefault("settings", {}).setdefault("clients", [])
+        clients.append({"id": uid, "email": name, "expiry": exp_date, "created": today})
+        modified = True
+
+    if not modified:
+        return False
+    _write_json(cfg_path, data)
     return True
 
 
@@ -424,29 +418,20 @@ def add_vless_user(name: str, days: int, uid: str | None = None) -> tuple[bool, 
 
 def delete_vless_user(name: str) -> tuple[bool, str]:
     removed = 0
-    pattern = re.compile(r"#vls(?:-http|-xhttp)?\s+" + re.escape(name) + r"\s")
-    email_marker = f'"email": "{name}"'
-
     for cfg_path in (XRAY_CFG, XRAY_NONE):
-        lines = read_cfg(cfg_path).split("\n")
-        out: list[str] = []
-        skip_next = False
-        for index, line in enumerate(lines):
-            if skip_next:
-                skip_next = False
+        try:
+            data = _read_json(cfg_path)
+        except:
+            continue
+        for ib in data.get("inbounds", []):
+            if ib.get("protocol") != "vless":
                 continue
-            if pattern.match(line):
-                removed += 1
-                if index + 1 < len(lines):
-                    following = lines[index + 1].strip()
-                    if following.startswith("},{") or email_marker in following:
-                        skip_next = True
-                continue
-            if email_marker in line:
-                removed += 1
-                continue
-            out.append(line)
-        write_cfg(cfg_path, "\n".join(out))
+            clients = ib.get("settings", {}).get("clients", [])
+            before = len(clients)
+            ib["settings"]["clients"] = [c for c in clients if c.get("email") != name]
+            after = len(ib["settings"]["clients"])
+            removed += before - after
+        _write_json(cfg_path, data)
 
     if not removed:
         return False, f"User {name} not found."
@@ -458,25 +443,24 @@ def delete_vless_user(name: str) -> tuple[bool, str]:
 def extend_vless_user(name: str, days: int) -> tuple[bool, str]:
     changed = False
     for cfg_path in (XRAY_CFG, XRAY_NONE):
-        content = read_cfg(cfg_path)
-        updated = content
-        for prefix in ("#vls", "#vls-http", "#vls-xhttp"):
-
-            def replace(match: re.Match[str], prefix: str = prefix) -> str:
-                uname, old_exp, created, old_uid = match.groups()
-                try:
-                    new_exp = datetime.strptime(old_exp, "%Y-%m-%d").date() + timedelta(days=days)
-                except Exception:
-                    new_exp = date.today() + timedelta(days=days)
-                return f"{prefix} {uname} {new_exp.isoformat()} {created} {old_uid}"
-
-            updated = re.sub(
-                prefix + r"\s+(" + re.escape(name) + r")\s+(\S+)\s+(\S+)\s+(\S+)",
-                replace,
-                updated,
-            )
-        if updated != content:
-            write_cfg(cfg_path, updated)
+        try:
+            data = _read_json(cfg_path)
+        except:
+            continue
+        modified = False
+        for ib in data.get("inbounds", []):
+            if ib.get("protocol") != "vless":
+                continue
+            for client in ib.get("settings", {}).get("clients", []):
+                if client.get("email") == name:
+                    try:
+                        current = datetime.strptime(client.get("expiry", ""), "%Y-%m-%d").date()
+                    except:
+                        current = date.today()
+                    client["expiry"] = (current + timedelta(days=days)).isoformat()
+                    modified = True
+        if modified:
+            _write_json(cfg_path, data)
             changed = True
 
     if not changed:
@@ -734,7 +718,7 @@ def format_online_page(data: dict, page: int) -> str:
 
 
 # Run detection once at module load (after all function defs)
-_, INBOUND_SECTIONS, EXT = detect_vless_inbounds()
+_, _, EXT = detect_vless_inbounds()
 SSH_DATA = detect_ssh_info()
 
 
