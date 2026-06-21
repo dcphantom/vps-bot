@@ -8,7 +8,6 @@ NC='\033[0m'
 
 echo -e "${CYAN}========================================"
 echo -e "   Telegram VPN Bot - Auto Installer"
-echo -e "   Encrypted Binary Version"
 echo -e "========================================${NC}"
 echo ""
 
@@ -23,33 +22,53 @@ while [[ -z "$BOT_TOKEN" ]]; do
 done
 
 echo ""
-echo -e "${YELLOW}[1/4] Creating config file...${NC}"
+echo -e "${YELLOW}[1/4] Installing dependencies...${NC}"
+pip3 install python-telegram-bot --break-system-packages -q 2>/dev/null || pip3 install python-telegram-bot -q
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo -e "${YELLOW}[2/4] Creating config file...${NC}"
 echo "{\"token\": \"$BOT_TOKEN\"}" > /root/bot_config.json
 chmod 600 /root/bot_config.json
 
-echo -e "${YELLOW}[2/4] Installing binary...${NC}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/vps_bot_bin" ]; then
-    cp "$SCRIPT_DIR/vps_bot_bin" /root/vps_bot_bin
-elif [ -f "/root/vps_bot_bin" ]; then
-    echo -e "${YELLOW}Binary found at /root/vps_bot_bin${NC}"
-else
-    echo -e "${YELLOW}Downloading binary from GitHub...${NC}"
-    wget -q -O /root/vps_bot_bin https://github.com/dcphantom/vps-bot/raw/master/vps_bot_bin
-fi
-chmod +x /root/vps_bot_bin
+# Copy source
+cp "$SCRIPT_DIR/vps_bot.py" /root/vps_bot.py 2>/dev/null || true
+chmod 755 /root/vps_bot.py 2>/dev/null || true
 
-echo -e "${YELLOW}[3/4] Creating systemd service...${NC}"
-cat > /etc/systemd/system/vps-bot.service << 'EOF'
+# Try to build encrypted binary
+BUILT_BINARY=false
+if command -v pyinstaller &>/dev/null; then
+    echo -e "${YELLOW}[3/4] Building encrypted binary (may take a minute)...${NC}"
+    cd /root
+    pyinstaller --onefile --name vps_bot_bin \
+      --hidden-import telegram --hidden-import telegram.ext \
+      vps_bot.py &>/tmp/pyinstaller.log && {
+        cp dist/vps_bot_bin /root/vps_bot_bin
+        chmod +x /root/vps_bot_bin
+        rm -rf /root/build /root/dist /root/*.spec /root/__pycache__ 2>/dev/null
+        BUILT_BINARY=true
+        BOT_CMD="/root/vps_bot_bin"
+        MODE="Encrypted binary"
+    } || echo -e "${YELLOW}Binary build failed, falling back to python3${NC}"
+fi
+
+if [ "$BUILT_BINARY" = false ]; then
+    echo -e "${YELLOW}[3/4] Using python3 (no pyinstaller)${NC}"
+    BOT_CMD="/usr/bin/python3 /root/vps_bot.py"
+    MODE="Python script"
+fi
+
+echo -e "${YELLOW}[4/4] Creating systemd service...${NC}"
+cat > /etc/systemd/system/vps-bot.service << EOF
 [Unit]
-Description=Telegram VPN Bot (Encrypted)
+Description=Telegram VPN Bot
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/root
-ExecStart=/root/vps_bot_bin
+ExecStart=$BOT_CMD
 Restart=always
 RestartSec=10
 
@@ -59,8 +78,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable vps-bot
-
-echo -e "${YELLOW}[4/4] Starting bot...${NC}"
 systemctl start vps-bot
 sleep 3
 
@@ -71,9 +88,16 @@ if [[ "$STATUS" == "active" ]]; then
     echo -e "   BOT IS RUNNING! ✅"
     echo -e "========================================"
     echo -e "   Status: $STATUS"
-    echo -e "   Mode:   Encrypted binary"
+    echo -e "   Mode:   $MODE"
     echo -e "   Token:  $(cut -d: -f1 <<< "$BOT_TOKEN"):...hidden"
+    echo -e "========================================"
+    echo -e "${YELLOW}Control:${NC}"
+    echo -e "   systemctl stop vps-bot       # Off"
+    echo -e "   systemctl start vps-bot      # On"
+    echo -e "   systemctl restart vps-bot    # Restart"
+    echo -e "   systemctl status vps-bot     # Check"
     echo -e "========================================${NC}"
 else
     echo -e "${YELLOW}Something went wrong. Check: systemctl status vps-bot${NC}"
+    journalctl -u vps-bot --no-pager -n 10
 fi
