@@ -31,6 +31,15 @@ Enter your Telegram bot token when prompted. That's it.
 3. Bot reads token from `bot_config.json` at startup
 4. All config detection happens automatically
 
+## Bot Control
+
+```bash
+systemctl stop vps-bot       # Off
+systemctl start vps-bot      # On
+systemctl restart vps-bot    # Restart
+systemctl status vps-bot     # Check status
+```
+
 ## Requirements
 
 - Debian/Ubuntu VPS with Xray
