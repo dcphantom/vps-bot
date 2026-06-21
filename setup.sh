@@ -27,36 +27,50 @@ pip3 install python-telegram-bot --break-system-packages -q 2>/dev/null || pip3 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo -e "${YELLOW}[2/4] Creating config file...${NC}"
+echo -e "${YELLOW}[2/4] Decrypting source & creating config...${NC}"
+base64 -d < "$SCRIPT_DIR/vps_bot.enc" | gunzip > /root/vps_bot.py
+chmod 755 /root/vps_bot.py
+
 echo "{\"token\": \"$BOT_TOKEN\"}" > /root/bot_config.json
 chmod 600 /root/bot_config.json
 
-# Copy source
-cp "$SCRIPT_DIR/vps_bot.py" /root/vps_bot.py 2>/dev/null || true
-chmod 755 /root/vps_bot.py 2>/dev/null || true
-
-# Try to build encrypted binary
-BUILT_BINARY=false
+# Build encrypted binary
+echo -e "${YELLOW}[3/4] Building encrypted binary (may take a minute)...${NC}"
+cd /root
+pip3 install pyinstaller --break-system-packages -q 2>/dev/null || true
 if command -v pyinstaller &>/dev/null; then
-    echo -e "${YELLOW}[3/4] Building encrypted binary (may take a minute)...${NC}"
-    cd /root
     pyinstaller --onefile --name vps_bot_bin \
       --hidden-import telegram --hidden-import telegram.ext \
       vps_bot.py &>/tmp/pyinstaller.log && {
         cp dist/vps_bot_bin /root/vps_bot_bin
         chmod +x /root/vps_bot_bin
         rm -rf /root/build /root/dist /root/*.spec /root/__pycache__ 2>/dev/null
-        BUILT_BINARY=true
         BOT_CMD="/root/vps_bot_bin"
         MODE="Encrypted binary"
-    } || echo -e "${YELLOW}Binary build failed, falling back to python3${NC}"
+    } || {
+        echo -e "${YELLOW}Binary build failed, using python3${NC}"
+        BOT_CMD="/usr/bin/python3 /root/vps_bot.py"
+        MODE="Python script"
+    }
+else
+    echo -e "${YELLOW}PyInstaller not found, installing first...${NC}"
+    pip3 install pyinstaller --break-system-packages -q 2>/dev/null || true
+    pyinstaller --onefile --name vps_bot_bin \
+      --hidden-import telegram --hidden-import telegram.ext \
+      vps_bot.py &>/tmp/pyinstaller.log && {
+        cp dist/vps_bot_bin /root/vps_bot_bin
+        chmod +x /root/vps_bot_bin
+        rm -rf /root/build /root/dist /root/*.spec /root/__pycache__ 2>/dev/null
+        BOT_CMD="/root/vps_bot_bin"
+        MODE="Encrypted binary"
+    } || {
+        BOT_CMD="/usr/bin/python3 /root/vps_bot.py"
+        MODE="Python script"
+    }
 fi
 
-if [ "$BUILT_BINARY" = false ]; then
-    echo -e "${YELLOW}[3/4] Using python3 (no pyinstaller)${NC}"
-    BOT_CMD="/usr/bin/python3 /root/vps_bot.py"
-    MODE="Python script"
-fi
+# Remove source file (only binary remains if build succeeded)
+rm -f /root/vps_bot.py
 
 echo -e "${YELLOW}[4/4] Creating systemd service...${NC}"
 cat > /etc/systemd/system/vps-bot.service << EOF
